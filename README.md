@@ -125,7 +125,7 @@ dsh plugin --profile web remove dsh-web-search-failover
 | `dsh plugin add` 卡住或报网络错误 | 拉的是 `codeload.github.com` 的 tarball，公司网络/代理常拦 | 走代理，或把仓库整目录拷过去，依赖改成 `file:` 路径后 `pnpm install`（插件无外部 npm 依赖，离线可装） |
 | 报 `WEB_PROVIDER_UNAVAILABLE` | 所有 backends 都 `available() === false`，通常是 `apiKeyEnv` 指向的引用没有值 | 检查 `.credentials.yaml` 的 `refs:` 里有该键，且键名与 `apiKeyEnv` 完全一致 |
 | 搜索一直是备用后端的模型 | 主后端失败但未报错（返回空结果也会触发回落） | 看网关日志确认主后端返回码；密钥额度、模型名拼写是最常见原因 |
-| 报 `unknown row id: web-search-deepseek` 或同 id 冲突 | profile patch 里手工加过 `id: web-search-deepseek` 的行，与 bundle patch 打架 | 删掉 profile 里那一行，插件自带的 patch 已负责禁用它 |
+| 配置树里出现同一个 row id 冲突（`web-search-deepseek` 被两处同时声明） | profile patch 里手工加过 `id: web-search-deepseek` 的行，与 bundle patch 打架 | 删掉 profile 里那一行，插件自带的 patch 已负责禁用它 |
 
 ## 同步到另一台机器
 
