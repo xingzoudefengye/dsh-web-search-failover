@@ -1,36 +1,64 @@
 # dsh-web-search-failover
 
-DeepSeek Harness 的搜索故障转移插件：按顺序尝试多个搜索后端，当前一个失败（HTTP 错误、没有 `web_search_tool_result` 结果块、或返回空结果）时自动落到下一个。
+DeepSeek Harness 的搜索故障转移插件：按顺序尝试多个搜索后端，前一个失败（HTTP 错误、没有 `web_search_tool_result` 结果块、或返回空结果）时自动落到下一个。
+
+> **English.** A failover web-search provider for DeepSeek Harness. The harness resolves exactly one search provider per `ctx.web` seam and a provider carries a single `model`, so one upstream error kills the whole search. This bundle registers a `deepseek-failover` provider that walks an ordered list of backends — same request, next backend on any failure (throw, abort excepted, or an empty result) — and only fails when every backend did. The stock `web-search-deepseek` row is disabled by the bundle's own patch, so no manual profile editing is needed. Node ≥ 22, harness ≥ 0.2.1, MIT.
 
 ## 为什么需要它
 
 Harness 的 `ctx.web` 每次只解析一个 search provider，provider 也只有单个 `model` 字段，没有失败重试链；`web-search-deepseek` 一旦上游出错，整次搜索就失败。new-api 的自动换渠道只在“同一个模型名有多个渠道”时生效，所以要么在网关造一个别名，要么在 harness 侧做转移。本插件选后者：网关保持官方模型名。
 
-## 怎么工作
+## 兼容性
 
-- 注册 search provider `deepseek-failover`，把 `ctx.web` 的 `searchProvider` 指向它。
-- 依次调用 `@deepseek-ai/dsh-web-search-deepseek` 的 provider；每个 backend 有独立的 `model` / `baseURL` / `apiKeyEnv`。
-- 失败判定：抛错、或成功但没有 sources。`WEB_ABORTED` 直接向上抛，不换后端。
-- 全部失败才返回最后一个错误；如果有后端成功但确实没结果，返回那个空结果。
+| 平台 | 支持 | 说明 |
+|---|---|---|
+| Windows 10/11（PowerShell 7 或 5.1） | ✅ | `dsh plugin` 本身跨平台；本文所有命令在 PowerShell 里原样可跑 |
+| macOS（zsh / bash） | ✅ | 原生路径 |
+| Linux | ✅ | 原生路径 |
+
+前置条件：
+
+- **DSH ≥ 0.2.1** — 插件复用 `@deepseek-ai/dsh-web-search-deepseek` 导出的 `DeepSeekSearchProvider`，0.2.0 没有这个接口
+- **Node ≥ 22**，且 **`pnpm` 在 `PATH` 上**（`dsh plugin` 内部调 pnpm）
+- 能访问 `https://codeload.github.com`（public 仓库，不需要 token）
+- 一个 OpenAI/Anthropic 兼容的搜索网关，以及它的 API key
 
 ## 安装
 
-一条命令（会自动写依赖、写 `dsh.profile.bundles`、并跑 `pnpm install`）：
+一条命令（自动写依赖、写 `dsh.profile.bundles`、并跑 `pnpm install`）：
 
 ```bash
 dsh plugin --profile web add github:xingzoudefengye/dsh-web-search-failover
 ```
 
-然后重启 DSH。插件没有 `prepare` 脚本、没有构建步骤，纯 JS，不会触发 pnpm 的 `allowBuilds` 拦截。
+```powershell
+# Windows 上完全一样
+dsh plugin --profile web add github:xingzoudefengye/dsh-web-search-failover
+```
 
-前置条件：
+然后**重启 DSH**（关掉 `dsh web` 的终端再重新起）。插件是在 host 启动时 import 的，不重启不会生效 —— 详见排错第 1 条。
 
-- **DSH ≥ 0.2.1**（插件复用 `@deepseek-ai/dsh-web-search-deepseek` 的 `DeepSeekSearchProvider`，0.2.0 没有这个接口）
-- **Node ≥ 22**，`pnpm` 在 `PATH` 上（`dsh plugin` 内部调 pnpm）
-- 能访问 `https://codeload.github.com`（public 仓库，不需要 token）
+Desktop 版 profile 名是 `desktop`，需要先**完全退出应用**再加：
 
-Desktop 版 profile 名是 `desktop`，需要先完全退出应用再加：
-`dsh plugin --profile desktop add ...`
+```bash
+dsh plugin --profile desktop add github:xingzoudefengye/dsh-web-search-failover
+```
+
+插件没有 `prepare` 脚本、没有构建步骤，纯 JS，不会触发 pnpm 的 `allowBuilds` 拦截。
+
+### 凭据
+
+插件的 `apiKeyEnv` 指向一个**凭据引用名**，不是明文。把网关令牌写进 harness 的凭据文件：
+
+- macOS / Linux：`~/.dsh/.credentials.yaml`
+- Windows：`%USERPROFILE%\.dsh\.credentials.yaml`
+
+```yaml
+refs:
+  NEWAPI_API_KEY: sk-...
+```
+
+这个文件由 harness 的 credentials 插件注入，**不需要写系统环境变量**。如果你更习惯环境变量，把 `apiKeyEnv` 改成对应的变量名即可。
 
 ### 不想用 CLI 时
 
@@ -43,59 +71,94 @@ Desktop 版 profile 名是 `desktop`，需要先完全退出应用再加：
 "dsh": { "profile": { "bundles": [ "...", "dsh-web-search-failover" ] } }
 ```
 
-再 `pnpm install`（在 profile 目录，如 `~/.dsh/profiles/web`），重启 DSH。
+再在 profile 目录（如 `~/.dsh/profiles/web`，Windows 是 `%USERPROFILE%\.dsh\profiles\web`）跑 `pnpm install`，重启 DSH。
 
-## 同步到另一台机器
-
-逻辑全在插件里，换机器不需要搬配置，但要满足四件事：
-
-1. **装插件**：跑上面那条 `dsh plugin add`。版本会自动跟着 `master` 最新提交，两台机器不需要相同 commit，但 harness 版本要一致（都 ≥ 0.2.1）。
-2. **凭据**：`~/.dsh/.credentials.yaml` 的 `refs:` 里要有 `NEWAPI_API_KEY`（值就是网关的 `sk-...` 令牌）：
-   ```yaml
-   refs:
-     NEWAPI_API_KEY: sk-...
-   ```
-   插件读的是环境变量名 `NEWAPI_API_KEY`，这个文件由 harness 的 credentials 插件注入；**不写系统环境变量也能用**。
-3. **清掉旧的 provider 行**：如果那台机器的 profile patch（`~/.dsh/profiles/<name>/cordis.patch.yml`）里有 `- id: web-search-deepseek` 这一行，删掉。插件自带的 bundle patch 已经会禁用它，用户层再加一行同 id 会打架。
-4. **网关照旧可达**：`baseURL` 默认写死在插件自带的 patch 里（本仓库用 `http://43.133.21.227:3000/v1`）。换机器后如果网关地址不同，在自己的 profile patch 里覆盖一行 `id: web-search-failover` 的 `config.backends` 即可。
-
-装完重启，在任意一台跑：
+## 验证
 
 ```bash
 dsh --profile web --dump-config | grep -A3 "searchProvider"
 ```
 
-应看到 `searchProvider: deepseek-failover`。再做一次真实搜索，网关日志里应出现 `claude-haiku-5-5`（主后端）；只有主后端失败时才会多一条 `deepseek-v4-flash`。
-
-### 公司网络访问不到 GitHub 时
-
-把仓库目录整个拷过去，依赖改成 `file:` 路径：
-
-```jsonc
-"dsh-web-search-failover": "file:/path/to/dsh-web-search-failover"
+```powershell
+dsh --profile web --dump-config | Select-String -Pattern "searchProvider" -Context 0,3
 ```
 
-再 `pnpm install`。插件没有外部 npm 依赖（全是 peerDependencies），所以离线也能装。
+应看到 `searchProvider: deepseek-failover`。再做一次真实搜索，网关日志里会出现主后端的模型名；只有主后端失败时才会多一条备用后端。
 
-## 插件做了什么
-
-插件自带 `cordis.patch.yml`（作为 bundle patch），会：
-
-1. 禁用 `web-search-deepseek`（单模型 provider）
-2. 把 `web.searchProvider` 设为 `deepseek-failover`（同时显式保留 `fetchProvider: http`）
-3. 插入 `web-search-failover` 行，默认后端为 `claude-haiku-5-5` → `deepseek-v4-flash`
+**关于默认网关地址**：插件自带的 `cordis.patch.yml` 里 `baseURL` 写的是一个示例网关（`http://43.133.21.227:3000/v1`）。用别人的地址跑不通，**请改成你自己的网关**，见下一节。
 
 ## 配置
+
+在 profile 的 `cordis.patch.yml` 里覆盖 `id: web-search-failover` 这一行的 `config`：
 
 ```yaml
 - id: web-search-failover
   config:
-    providerId: deepseek-failover
+    providerId: deepseek-failover   # ctx.web 选中的 provider 名，一般不用改
     backends:
-      - { model: claude-haiku-5-5, baseURL: http://43.133.21.227:3000/v1, apiKeyEnv: NEWAPI_API_KEY }
-      - { model: deepseek-v4-flash, baseURL: http://43.133.21.227:3000/v1, apiKeyEnv: NEWAPI_API_KEY }
+      - { model: claude-haiku-5-5,   baseURL: https://your-gateway/v1, apiKeyEnv: NEWAPI_API_KEY }
+      - { model: deepseek-v4-flash,  baseURL: https://your-gateway/v1, apiKeyEnv: NEWAPI_API_KEY }
 ```
 
-## 升级注意
+| 键 | 默认 | 作用 |
+|---|---|---|
+| `providerId` | `deepseek-failover` | 注册给 `ctx.web` 的 provider 名；bundle patch 里 `web.searchProvider` 必须与它一致 |
+| `backends` | — | **有序**列表，第 0 个优先，其后都是备胎；每项 `model` / `baseURL` / `apiKeyEnv` 各自独立 |
+| `apiKeyEnv` / `baseURL` / `apiKey` / `apiVersion` / `maxTokens` / `maxUses` | 见 `lib/index.js` 的 `Config` | 旧式单后端字段；用 `backends` 时不需要，插件按 backend 逐个构造 provider |
 
-插件复用 `@deepseek-ai/dsh-web-search-deepseek` 的 `DeepSeekSearchProvider`。该类构造签名是公开导出的一部分，但 harness 大版本升级时仍应跑一次真实搜索确认。
+失败判定：抛错、或者成功但没有 sources。`WEB_ABORTED`（用户取消）直接向上抛，不换后端 —— 取消不该触发备用后端。全部失败才返回最后一个错误；如果所有后端都成功但确实没结果，返回那个空结果。
+
+## 卸载
+
+```bash
+dsh plugin --profile web remove dsh-web-search-failover
+```
+
+然后重启 DSH。bundle 的 patch 随之失效，harness 原有的 `web-search-deepseek` 行会恢复；如果你之前手工在 profile patch 里删过它，需要自己加回来。
+
+## 排错
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `dsh plugin add` 成功，但搜索行为没变 | 插件在 host 进程启动时 import，进程里的模块不会热替换 | 重启 DSH（关掉 `dsh web` 再起） |
+| 改了插件源码（哪怕是 `lib/index.js`）也不生效 | Node 的 ESM 缓存：已 import 的模块不会重新执行 | 同上，重启 host；GitHub 安装还需先 `dsh plugin add` 重装以拉新代码 |
+| `dsh plugin add` 卡住或报网络错误 | 拉的是 `codeload.github.com` 的 tarball，公司网络/代理常拦 | 走代理，或把仓库整目录拷过去，依赖改成 `file:` 路径后 `pnpm install`（插件无外部 npm 依赖，离线可装） |
+| 报 `WEB_PROVIDER_UNAVAILABLE` | 所有 backends 都 `available() === false`，通常是 `apiKeyEnv` 指向的引用没有值 | 检查 `.credentials.yaml` 的 `refs:` 里有该键，且键名与 `apiKeyEnv` 完全一致 |
+| 搜索一直是备用后端的模型 | 主后端失败但未报错（返回空结果也会触发回落） | 看网关日志确认主后端返回码；密钥额度、模型名拼写是最常见原因 |
+| 报 `unknown row id: web-search-deepseek` 或同 id 冲突 | profile patch 里手工加过 `id: web-search-deepseek` 的行，与 bundle patch 打架 | 删掉 profile 里那一行，插件自带的 patch 已负责禁用它 |
+
+## 同步到另一台机器
+
+逻辑全在插件里，换机器不需要搬配置，但要满足四件事：
+
+1. **装插件**：跑上面那条 `dsh plugin add`。版本自动跟 `master` 最新提交，两台机器不必同 commit，但 harness 版本要一致（都 ≥ 0.2.1）。
+2. **凭据**：`.credentials.yaml` 的 `refs:` 里要有 `NEWAPI_API_KEY`。
+3. **清掉旧的 provider 行**：profile patch 里若还有 `- id: web-search-deepseek`，删掉。
+4. **网关可达**：`baseURL` 换成本机可访问的地址。
+
+## 开发
+
+本仓库是纯 JS、无构建步骤。仓库里没有 `node_modules`，直接 `npm test` 会因为找不到 `@deepseek-ai/*` 的 peer 依赖而失败 —— 先把本机已安装的 harness 包链进来：
+
+```bash
+node scripts/dev-link.mjs            # 探测 dsh 的安装位置，链入 schemastery / dsh-web / dsh-web-search-deepseek 等
+npm test                             # node --test
+```
+
+`dev-link` 依次探测：`dsh` 可执行文件所在的 npm 目录、`$DSH_HOME/profiles/<profile>`、`$DSH_HOME/profiles`、`$DSH_HOME`，也可以用第一个参数或 `DSH_PACKAGE_DIR` 直接指定 `@deepseek-ai/dsh-*` 所在目录。Windows 上用 junction，不需要管理员权限。
+
+改完代码在本地验证，再装到 profile：`dsh plugin --profile web add <本仓库绝对路径>` 走 `link:` 依赖，配合 `dev-link` 即可改完重启 host 就看到效果。
+
+## 相关插件
+
+同作者、同一套安装方式（`dsh plugin add github:xingzoudefengye/<repo>`）：
+
+- [dsh-browser](https://github.com/xingzoudefengye/dsh-browser) — 给 agent 一个可驱动的真实浏览器，侧栏并排显示
+- [dsh-compaction-local-handoff](https://github.com/xingzoudefengye/dsh-compaction-local-handoff) — 无模型的本地交接式压缩
+- [dsh-project-memory](https://github.com/xingzoudefengye/dsh-project-memory) — 有界、可提交进 git 的项目记忆
+- [dsh-resume-budget](https://github.com/xingzoudefengye/dsh-resume-budget) — 会话恢复时的输入预算控制
+- [dsh-session-recall](https://github.com/xingzoudefengye/dsh-session-recall) — 无模型、有界的会话史书
+
+## 许可
+
+MIT © xingzoudefengye，见 [LICENSE](LICENSE)。
