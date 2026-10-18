@@ -1,0 +1,29 @@
+# Route ctx.web search through the failover provider and retire the stock
+# single-model DeepSeek provider (deepseek-official).
+#
+# Backends are ordered: index 0 wins, later entries are failbacks. A backend is
+# skipped when it throws or when its native search returns no result blocks.
+
+- id: web-search-deepseek
+  disabled: true
+
+# Keep the fetch provider explicit: patching the row replaces its config.
+- id: web
+  config:
+    searchProvider: deepseek-failover
+    fetchProvider: http
+
+- insert:
+    - id: web-search-failover
+      name: 'dsh-web-search-failover'
+      config:
+        providerId: deepseek-failover
+        apiKeyEnv: NEWAPI_API_KEY
+        baseURL: http://43.133.21.227:3000/v1
+        backends:
+          - model: claude-haiku-5-5
+            baseURL: http://43.133.21.227:3000/v1
+            apiKeyEnv: NEWAPI_API_KEY
+          - model: deepseek-v4-flash
+            baseURL: http://43.133.21.227:3000/v1
+            apiKeyEnv: NEWAPI_API_KEY
