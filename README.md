@@ -89,15 +89,15 @@ dsh --profile web --dump-config | Select-String -Pattern "searchProvider" -Conte
 
 ## 配置
 
-在 profile 的 `cordis.patch.yml` 里覆盖 `id: web-search-failover` 这一行的 `config`：
+在 profile 的 `cordis.patch.yml` 里覆盖 `id: web-search-failover` 这一行的 `config`（插件自带的默认顺序是 `deepseek-v4-flash` → `claude-haiku-5-5`，不覆盖就按这个走）：
 
 ```yaml
 - id: web-search-failover
   config:
     providerId: deepseek-failover   # ctx.web 选中的 provider 名，一般不用改
     backends:
-      - { model: claude-haiku-5-5,   baseURL: https://your-gateway/v1, apiKeyEnv: NEWAPI_API_KEY }
       - { model: deepseek-v4-flash,  baseURL: https://your-gateway/v1, apiKeyEnv: NEWAPI_API_KEY }
+      - { model: claude-haiku-5-5,   baseURL: https://your-gateway/v1, apiKeyEnv: NEWAPI_API_KEY }
 ```
 
 | 键 | 默认 | 作用 |
