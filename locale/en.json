@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "Failover web search for DeepSeek Harness: try backends in order, fall back when one fails or returns no results."
+  }
+}
