@@ -1,11 +1,23 @@
 # Route ctx.web search through the failover provider and retire the stock
 # single-model DeepSeek provider (deepseek-official).
 #
-# Backends are ordered: index 0 wins, later entries are fallbacks. A backend is
-# skipped when it throws or when its native search returns no result blocks.
+# Backends are ordered: index 0 wins, later entries are fallbacks. An entry is
+# one of two shapes:
 #
-# Default order: deepseek-v4-flash (DeepSeek official, pay per token) first,
-# claude-haiku-5-5 (opencode go subscription) as the fallback.
+#   provider: <id>                     delegate to a search provider already
+#                                      registered on ctx.web (client-side ones
+#                                      such as the built-in deepseek-search-api)
+#   model + baseURL + apiKeyEnv        a Messages model searched through the
+#                                      server-side web_search tool
+#
+# A backend is skipped when it throws, when it is unavailable, or when its
+# native search returns no results. The delegated target is resolved at call
+# time, so it may register after this plugin; a missing target just means that
+# backend is unavailable.
+#
+# Default order: the official DeepSeek Search API first (one HTTP request, no
+# model turn), then deepseek-v4-flash (gateway, pay per token), then
+# claude-haiku-5-5 (opencode go subscription) as the last resort.
 
 - id: web-search-deepseek
   disabled: true
@@ -24,6 +36,7 @@
         apiKeyEnv: NEWAPI_API_KEY
         baseURL: http://43.133.21.227:3000/v1
         backends:
+          - provider: deepseek-search-api
           - model: deepseek-v4-flash
             baseURL: http://43.133.21.227:3000/v1
             apiKeyEnv: NEWAPI_API_KEY

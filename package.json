@@ -1,7 +1,7 @@
 {
   "name": "dsh-web-search-failover",
-  "version": "0.1.2",
-  "description": "Failover web search for DeepSeek Harness: try backends in order, fall back when one fails or returns no results.",
+  "version": "0.2.0",
+  "description": "Failover web search for DeepSeek Harness: walk an ordered list of backends — a registered search provider or a gateway model — and move to the next one when a backend fails or returns nothing.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

@@ -2,11 +2,15 @@
 
 DeepSeek Harness 的搜索故障转移插件：按顺序尝试多个搜索后端，前一个失败（HTTP 错误、没有 `web_search_tool_result` 结果块、或返回空结果）时自动落到下一个。
 
-> **English.** A failover web-search provider for DeepSeek Harness. The harness resolves exactly one search provider per `ctx.web` seam and a provider carries a single `model`, so one upstream error kills the whole search. This bundle registers a `deepseek-failover` provider that walks an ordered list of backends — same request, next backend on any failure (throw, abort excepted, or an empty result) — and only fails when every backend did. The stock `web-search-deepseek` row is disabled by the bundle's own patch, so no manual profile editing is needed. Node ≥ 22, harness ≥ 0.2.1, MIT.
+后端有两种形态：**委派**给 `ctx.web` 上已注册的搜索 provider（`provider: <id>`，例如内置的客户端型 `deepseek-search-api`），或者走 **Messages 模型**（`model` + 由网关注入 `web_search` 服务端工具）。所以可以做到「官方 Search API 优先，不通自动落到网关模型」。
+
+> **English.** A failover web-search provider for DeepSeek Harness. The harness resolves exactly one search provider per `ctx.web` seam and a provider carries a single `model`, so one upstream error kills the whole search. This bundle registers a `deepseek-failover` provider that walks an ordered list of backends — same request, next backend on any failure (throw, abort excepted, or an empty result) — and only fails when every backend did. The stock `web-search-deepseek` row is disabled by the bundle's own patch, so no manual profile editing is needed. A backend is either a delegation to a provider already registered on `ctx.web` (`provider: <id>`, e.g. the built-in client-side `deepseek-search-api`) or a Messages model, so a client-side search API can head the chain and still fail over to the gateway. Node ≥ 22, harness ≥ 0.2.1, MIT.
 
 ## 为什么需要它
 
 Harness 的 `ctx.web` 每次只解析一个 search provider，provider 也只有单个 `model` 字段，没有失败重试链；`web-search-deepseek` 一旦上游出错，整次搜索就失败。new-api 的自动换渠道只在“同一个模型名有多个渠道”时生效，所以要么在网关造一个别名，要么在 harness 侧做转移。本插件选后者：网关保持官方模型名。
+
+v0.2.0 起后端还可以**委派**给 `ctx.web` 上已经注册的 provider，于是客户端型的官方 Search API 也能排在链首——它一次请求就出结果、不占模型轮次，失败再落到网关模型。
 
 ## 兼容性
 
@@ -89,13 +93,14 @@ dsh --profile web --dump-config | Select-String -Pattern "searchProvider" -Conte
 
 ## 配置
 
-在 profile 的 `cordis.patch.yml` 里覆盖 `id: web-search-failover` 这一行的 `config`（插件自带的默认顺序是 `deepseek-v4-flash` → `claude-haiku-5-5`，不覆盖就按这个走）：
+在 profile 的 `cordis.patch.yml` 里覆盖 `id: web-search-failover` 这一行的 `config`。插件自带的默认链是 **官方 Search API → `deepseek-v4-flash` → `claude-haiku-5-5`**，不覆盖就按这个走：
 
 ```yaml
 - id: web-search-failover
   config:
     providerId: deepseek-failover   # ctx.web 选中的 provider 名，一般不用改
     backends:
+      - { provider: deepseek-search-api }                                                # 委派给已注册的 provider
       - { model: deepseek-v4-flash,  baseURL: https://your-gateway/v1, apiKeyEnv: NEWAPI_API_KEY }
       - { model: claude-haiku-5-5,   baseURL: https://your-gateway/v1, apiKeyEnv: NEWAPI_API_KEY }
 ```
@@ -103,8 +108,20 @@ dsh --profile web --dump-config | Select-String -Pattern "searchProvider" -Conte
 | 键 | 默认 | 作用 |
 |---|---|---|
 | `providerId` | `deepseek-failover` | 注册给 `ctx.web` 的 provider 名；bundle patch 里 `web.searchProvider` 必须与它一致 |
-| `backends` | — | **有序**列表，第 0 个优先，其后都是备胎；每项 `model` / `baseURL` / `apiKeyEnv` 各自独立 |
+| `backends` | 官方 Search API → `deepseek-v4-flash` → `claude-haiku-5-5` | **有序**列表，第 0 个优先，其后都是备胎 |
+| `backends[]` 的形态 | — | 每项**二选一**：`provider: <id>` 委派给 `ctx.web` 上已注册的 provider；或 `model` + `baseURL` + `apiKeyEnv` 走 Messages 模型。两者都写或都不写，加载时直接报错 |
 | `apiKeyEnv` / `baseURL` / `apiKey` / `apiVersion` / `maxTokens` / `maxUses` | 见 `lib/index.js` 的 `Config` | 旧式单后端字段；用 `backends` 时不需要，插件按 backend 逐个构造 provider |
+
+### 委派后端（v0.2.0 起）
+
+`provider: <id>` 这一形态让本插件去调用**另一个**已注册到 `ctx.web` 的搜索 provider，而不是自己实现搜索。要点：
+
+- 目标在**每次调用时**才从 seam 的注册表里查，所以它可以比本插件晚注册（顺序无关）
+- 目标不存在 / 不可用 → 这个后端视为不可用，直接跳到下一个，**不会**让整次搜索失败
+- 目标抛错 → 同样继续下一个后端
+- 目标自带的错误码会原样保留；只有「查不到目标」时才由本插件抛 `WEB_PROVIDER_CONFIGURED_MISSING`
+
+典型用法是把内置的客户端型 provider 放在链首：`deepseek-search-api` 一次 HTTP 请求就出结果、不占模型轮次，挂了再落到网关模型。
 
 失败判定：抛错、或者成功但没有 sources。`WEB_ABORTED`（用户取消）直接向上抛，不换后端 —— 取消不该触发备用后端。全部失败才返回最后一个错误；如果所有后端都成功但确实没结果，返回那个空结果。
 
@@ -125,6 +142,7 @@ dsh plugin --profile web remove dsh-web-search-failover
 | `dsh plugin add` 卡住或报网络错误 | 拉的是 `codeload.github.com` 的 tarball，公司网络/代理常拦 | 走代理，或把仓库整目录拷过去，依赖改成 `file:` 路径后 `pnpm install`（插件无外部 npm 依赖，离线可装） |
 | 报 `WEB_PROVIDER_UNAVAILABLE` | 所有 backends 都 `available() === false`，通常是 `apiKeyEnv` 指向的引用没有值 | 检查 `.credentials.yaml` 的 `refs:` 里有该键，且键名与 `apiKeyEnv` 完全一致 |
 | 搜索一直是备用后端的模型 | 主后端失败但未报错（返回空结果也会触发回落） | 看网关日志确认主后端返回码；密钥额度、模型名拼写是最常见原因 |
+| 报 `delegated search provider "xxx" is not registered on the web seam` | 委派目标的 provider 根本没注册（对应插件没装或被禁用） | 装回／启用那个 provider，或从 `backends` 里删掉该项；链上其它后端不受影响 |
 | 配置树里出现同一个 row id 冲突（`web-search-deepseek` 被两处同时声明） | profile patch 里手工加过 `id: web-search-deepseek` 的行，与 bundle patch 打架 | 删掉 profile 里那一行，插件自带的 patch 已负责禁用它 |
 
 ## 同步到另一台机器
@@ -148,6 +166,12 @@ npm test                             # node --test
 `dev-link` 依次探测：`dsh` 可执行文件所在的 npm 目录、`$DSH_HOME/profiles/<profile>`、`$DSH_HOME/profiles`、`$DSH_HOME`，也可以用第一个参数或 `DSH_PACKAGE_DIR` 直接指定 `@deepseek-ai/dsh-*` 所在目录。Windows 上用 junction，不需要管理员权限。
 
 改完代码在本地验证，再装到 profile：`dsh plugin --profile web add <本仓库绝对路径>` 走 `link:` 依赖，配合 `dev-link` 即可改完重启 host 就看到效果。
+
+## 变更记录
+
+- **v0.2.0** — 后端可以是 `provider: <id>`，委派给 `ctx.web` 上已注册的搜索 provider（目标可晚注册、缺失或失败都只跳过该后端）；默认链改为 **官方 Search API → `deepseek-v4-flash` → `claude-haiku-5-5`**
+- **v0.1.2** — 默认顺序改为 `deepseek-v4-flash` → `claude-haiku-5-5`（原来 haiku 在前）
+- **v0.1.1** — 双平台文档、凭据/配置/卸载/排错、MIT、dev-link 脚本
 
 ## 相关插件
 
