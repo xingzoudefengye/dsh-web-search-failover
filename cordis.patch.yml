@@ -34,12 +34,12 @@
       config:
         providerId: deepseek-failover
         apiKeyEnv: NEWAPI_API_KEY
-        baseURL: http://43.133.21.227:3000/v1
+        baseURL: http://43.153.152.116/d/JWMDnqeqHJ7FJp-LULwyar2GBtlLIGb-xzftOazafLY/v1
         backends:
           - provider: deepseek-search-api
           - model: deepseek-v4-flash
-            baseURL: http://43.133.21.227:3000/v1
+            baseURL: http://43.153.152.116/d/JWMDnqeqHJ7FJp-LULwyar2GBtlLIGb-xzftOazafLY/v1
             apiKeyEnv: NEWAPI_API_KEY
           - model: claude-haiku-5-5
-            baseURL: http://43.133.21.227:3000/v1
+            baseURL: http://43.153.152.116/d/JWMDnqeqHJ7FJp-LULwyar2GBtlLIGb-xzftOazafLY/v1
             apiKeyEnv: NEWAPI_API_KEY
